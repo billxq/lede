@@ -1,93 +1,61 @@
-# 
-# <https://github.com/KFERMercer/OpenWrt-CI>
-#
-# Copyright (C) 2019 P3TERX
-#
-# Copyright (C) 2020 KFERMercer
-#
-name: OpenWrt-CI
+name: Build OpenWrt
 
+# 触发条件：手动触发（workflow_dispatch）或在 push 到主分支时触发
 on:
-  schedule:
-    - cron: 0 20 * * *
-
-permissions:
-  contents: read
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
-
-  build_openwrt:
-
-    name: Build OpenWrt Firmware
-
+  build:
+    # 使用 GitHub 提供的 Ubuntu Runner 作为构建环境
     runs-on: ubuntu-latest
+    env:
+      FORCE_UNSAFE_CONFIGURE: 1
 
     steps:
-      - name: Space cleanup and Initialization environment
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          docker rmi `docker images -q`
-          sudo -E rm -rf /usr/share/dotnet /etc/mysql /etc/php /etc/apt/sources.list.d /usr/local/lib/android
-          sudo -E apt-mark hold grub-efi-amd64-signed
-          sudo -E apt update
-          sudo -E apt -y purge azure-cli* docker* ghc* zulu* llvm* firefox google* dotnet* powershell* openjdk* mysql* php* mongodb* dotnet* snap*
-          sudo -E apt -y full-upgrade
-          sudo -E apt -y install ack antlr3 aria2 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip libpython3-dev qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
-          sudo -E systemctl daemon-reload
-          sudo -E apt -y autoremove --purge
-          sudo -E apt clean
-          sudo -E timedatectl set-timezone "Asia/Shanghai"
-
-      - name: Checkout OpenWrt
+      # Step 1: 检出仓库代码
+      - name: Checkout source code
         uses: actions/checkout@v3
 
-      - name: Update feeds
+      # Step 2: 设置编译环境
+      - name: Set up environment
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev \
+          libz-dev patch unzip zlib1g-dev lib32gcc1 libc6-dev-i386 subversion flex uglifyjs git-core \
+          gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils \
+          upx libelf-dev autoconf automake libtool autopoint device-tree-compiler gcc g++ python2.7 \
+          python3 python3-setuptools python3-pip rsync
+
+      # Step 3: 配置编译参数（此步骤可根据需要修改）
+      - name: Update and install feeds
         run: |
           sed -i 's/#src-git helloworld/src-git helloworld/g' ./feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Generate configuration file
-        run: make defconfig
-
-      - name: Download packages
-        run: make download -j16
-
-      - name: Compile firmware
+      # Step 4: 自定义配置（可选）
+      # 你可以直接替换成自己的 .config 文件，或者进行定制化配置
+      - name: Configure build
         run: |
+          cp ./config.example .config
+          make defconfig
+
+      # Step 5: 编译固件
+      - name: Build firmware
+        run: |
+          make download -j$(nproc) || make download -j1 V=s
           make -j$(nproc) || make -j1 V=s
-          echo "======================="
-          echo "Space usage:"
-          echo "======================="
-          df -h
-          echo "======================="
-          du -h --max-depth=1 ./ --exclude=build_dir --exclude=bin
-          du -h --max-depth=1 ./build_dir
-          du -h --max-depth=1 ./bin
 
-      - name: Prepare artifact
-        run: |
-          mkdir -p ./artifact/package
-          mkdir -p ./artifact/buildinfo
-          rm -rf $(find ./bin/targets/ -type d -name "packages")
-          cp -rf $(find ./bin/packages/ -type f -name "*.ipk") ./artifact/package/
-          cp -rf $(find ./bin/targets/ -type f -name "*.buildinfo" -o -name "*.manifest") ./artifact/buildinfo/
-
-      - name: Upload buildinfo
-        uses: actions/upload-artifact@v3
-        with:
-          name: OpenWrt_buildinfo
-          path: ./artifact/buildinfo/
-
-      - name: Upload package
-        uses: actions/upload-artifact@v3
-        with:
-          name: OpenWrt_package
-          path: ./artifact/package/
-
+      # Step 6: 保存编译结果
+      # 将编译好的固件作为 GitHub Action 的输出
       - name: Upload firmware
         uses: actions/upload-artifact@v3
         with:
-          name: OpenWrt_firmware
-          path: ./bin/targets/
+          name: openwrt-firmware
+          path: bin/targets/
